@@ -139,6 +139,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: centralenv-*
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
