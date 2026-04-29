@@ -1,0 +1,23 @@
+# Rust
+target/
+
+# Node
+node_modules/
+
+# SvelteKit
+.svelte-kit/
+build/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
