@@ -183,6 +183,102 @@ Anything after `--` is the command and its arguments. The vars exist only in tha
 
 ---
 
+## Deploying with Docker / Coolify
+
+The repo ships a `docker-compose.yml` plus a `Dockerfile` per service.
+
+### Local Docker
+
+```sh
+cp .env.example .env
+# edit .env: set MASTER_KEY (openssl rand -base64 32), ADMIN_PASSWORD, VITE_API_URL
+
+docker compose up -d --build
+# server → http://localhost:3001
+# web    → http://localhost:3000
+```
+
+The SQLite DB lives in the named volume `centralenv-data`; back it up alongside `MASTER_KEY`.
+
+### Coolify (recommended for home server)
+
+CentralEnv is two services that need separate public URLs because the web bundle calls the API from the browser.
+
+**1. Create the project in Coolify**
+
+- New Resource → **Docker Compose** → point at this Git repo (`master` branch).
+- Coolify will detect `docker-compose.yml` and create both `server` and `web` services.
+
+**2. Assign domains**
+
+- `server`  → e.g. `https://api.centralenv.home.example.com`
+- `web`     → e.g. `https://centralenv.home.example.com`
+
+Coolify provisions Let's Encrypt certs automatically.
+
+**3. Set environment variables (Coolify → Environment Variables)**
+
+| Key               | Value                                    | Notes                                              |
+| ----------------- | ---------------------------------------- | -------------------------------------------------- |
+| `MASTER_KEY`      | `<openssl rand -base64 32>`              | Mark as "Secret". Back it up.                      |
+| `ADMIN_USERNAME`  | `admin`                                  | Only used on first boot to seed the admin user.    |
+| `ADMIN_PASSWORD`  | `<your password>`                        | Mark as "Secret". Same: first-boot seed only.      |
+| `VITE_API_URL`    | `https://api.centralenv.home.example.com`| **Build-time** — must be set before deploy.        |
+| `RUST_LOG`        | `centralenv_server=info,tower_http=info` | Optional.                                          |
+
+In Coolify, mark `VITE_API_URL` as a **Build Variable** (not just runtime) so the web image bakes it into the bundle.
+
+**4. Configure the volume**
+
+The compose file declares a named volume `centralenv-data` mounted at `/data` in the server. Coolify persists this across redeploys. To back up: SSH into the host and `docker run --rm -v centralenv-data:/data alpine tar czf - /data > backup.tgz`.
+
+**5. Deploy**
+
+Click Deploy. After the build:
+
+- Hit `https://centralenv.home.example.com` → log in with the admin credentials.
+- Verify in the browser dev tools that requests go to `https://api.centralenv.home.example.com/...`.
+
+**6. Point the CLI at it**
+
+```sh
+centralenv login \
+  --url https://api.centralenv.home.example.com \
+  --token <token-from-Tokens-page>
+```
+
+### Single-domain alternative (Tailscale-only, no Coolify)
+
+If you don't want a public domain at all and just want it on Tailscale:
+
+```sh
+# On the home server:
+git clone <repo> centralenv && cd centralenv
+cp .env.example .env  # set MASTER_KEY + ADMIN_PASSWORD; VITE_API_URL stays empty
+docker compose up -d --build
+```
+
+Then on each device:
+
+```sh
+centralenv login --url http://<tailscale-host>:3001 --token <token>
+```
+
+The web UI in this mode only works from the home host itself (or via a manual reverse proxy) because the empty `VITE_API_URL` means the browser tries the same origin as where it loaded the page. For pure CLI use this doesn't matter.
+
+### Rebuilding when `VITE_API_URL` changes
+
+`VITE_API_URL` is read at **build time** and embedded in the JS bundle. Changing it in env vars after the fact does nothing — you must rebuild the `web` image:
+
+```sh
+docker compose build --no-cache web
+docker compose up -d web
+```
+
+In Coolify, hit **Redeploy** after editing the build variable.
+
+---
+
 ## Operating the server long-term
 
 ### Run as a service (macOS launchd)
