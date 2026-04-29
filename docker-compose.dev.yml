@@ -1,0 +1,35 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: centralenv-server:dev
+    restart: unless-stopped
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      DATABASE_URL: sqlite:///data/centralenv.db
+      BIND_ADDR: 0.0.0.0:3001
+      RUST_LOG: ${RUST_LOG:-centralenv_server=info,tower_http=info}
+    volumes:
+      - centralenv-data:/data
+    ports:
+      - "${SERVER_PORT:-3001}:3001"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: centralenv-web:dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - server
+
+volumes:
+  centralenv-data:

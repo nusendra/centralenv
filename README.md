@@ -113,25 +113,36 @@ EOF
 
 The other device must be able to reach the server (e.g. on the same Tailscale tailnet).
 
-### Option A — build from source
+### Option A — download a prebuilt binary (fastest)
+
+Pick the right archive from the latest [GitHub Release](https://github.com/nusendra/centralenv/releases/latest):
+
+```sh
+# macOS (Apple Silicon)
+curl -L -o centralenv.tar.gz \
+  https://github.com/nusendra/centralenv/releases/latest/download/centralenv-darwin-arm64.tar.gz
+
+# Linux x86_64
+curl -L -o centralenv.tar.gz \
+  https://github.com/nusendra/centralenv/releases/latest/download/centralenv-linux-amd64.tar.gz
+
+tar xzf centralenv.tar.gz
+sudo install centralenv-* /usr/local/bin/centralenv
+centralenv --help
+```
+
+Available targets: `darwin-amd64`, `darwin-arm64`, `linux-amd64`, `linux-arm64`. Each ships with a `.sha256` next to it.
+
+### Option B — build from source
 
 ```sh
 git clone <this-repo> centralenv
 cd centralenv/cli
 cargo build --release
-
-# put it on PATH
 sudo ln -sf "$PWD/target/release/centralenv" /usr/local/bin/centralenv
-centralenv --help
 ```
 
-### Option B — `cargo install` from a path
-
-```sh
-cargo install --path centralenv/cli
-```
-
-Either way, `centralenv` ends up on `$PATH`.
+Or `cargo install --path centralenv/cli` if you have a Rust toolchain.
 
 ### Configure once
 
@@ -185,59 +196,53 @@ Anything after `--` is the command and its arguments. The vars exist only in tha
 
 ## Deploying with Docker / Coolify
 
-The repo ships a `docker-compose.yml` plus a `Dockerfile` per service.
+GitHub Actions builds and pushes prebuilt images to **GHCR** on every push to `master`. Coolify pulls these — no compilation on your home server.
 
-### Local Docker
+| Image                                       | What                                       |
+| ------------------------------------------- | ------------------------------------------ |
+| `ghcr.io/nusendra/centralenv-server:latest` | Rust API binary (linux/amd64, linux/arm64) |
+| `ghcr.io/nusendra/centralenv-web:latest`    | SvelteKit (adapter-node) bundle            |
 
-```sh
-cp .env.example .env
-# edit .env: set MASTER_KEY (openssl rand -base64 32), ADMIN_PASSWORD, VITE_API_URL
+`PUBLIC_API_URL` is read at **runtime** by the web container, so changing the API URL never requires a rebuild.
 
-docker compose up -d --build
-# server → http://localhost:3001
-# web    → http://localhost:3000
-```
+### Coolify (recommended)
 
-The SQLite DB lives in the named volume `centralenv-data`; back it up alongside `MASTER_KEY`.
+**1. Make sure the package is accessible**
 
-### Coolify (recommended for home server)
+The first time the workflow runs, it creates two private GHCR packages. In GitHub → your profile → **Packages** → open each package → Settings → set **Visibility: Public**, OR add Coolify's GitHub PAT as a registry credential in Coolify (Sources → Add → "GitHub Container Registry").
 
-CentralEnv is two services that need separate public URLs because the web bundle calls the API from the browser.
+**2. Create the project**
 
-**1. Create the project in Coolify**
+- New Resource → **Docker Compose** → point at this Git repo (`master`).
+- Coolify detects `docker-compose.yml` (which uses `image:`, no build step on the host).
 
-- New Resource → **Docker Compose** → point at this Git repo (`master` branch).
-- Coolify will detect `docker-compose.yml` and create both `server` and `web` services.
+**3. Assign domains**
 
-**2. Assign domains**
-
-- `server`  → e.g. `https://api.centralenv.home.example.com`
-- `web`     → e.g. `https://centralenv.home.example.com`
+- `server` → e.g. `https://api.centralenv.home.example.com`
+- `web`    → e.g. `https://centralenv.home.example.com`
 
 Coolify provisions Let's Encrypt certs automatically.
 
-**3. Set environment variables (Coolify → Environment Variables)**
+**4. Set environment variables**
 
-| Key               | Value                                    | Notes                                              |
-| ----------------- | ---------------------------------------- | -------------------------------------------------- |
-| `MASTER_KEY`      | `<openssl rand -base64 32>`              | Mark as "Secret". Back it up.                      |
-| `ADMIN_USERNAME`  | `admin`                                  | Only used on first boot to seed the admin user.    |
-| `ADMIN_PASSWORD`  | `<your password>`                        | Mark as "Secret". Same: first-boot seed only.      |
-| `VITE_API_URL`    | `https://api.centralenv.home.example.com`| **Build-time** — must be set before deploy.        |
-| `RUST_LOG`        | `centralenv_server=info,tower_http=info` | Optional.                                          |
+| Key              | Value                                       | Notes                                          |
+| ---------------- | ------------------------------------------- | ---------------------------------------------- |
+| `MASTER_KEY`     | `<openssl rand -base64 32>`                 | Mark as Secret. Back it up — losing it bricks the DB. |
+| `ADMIN_USERNAME` | `admin`                                     | First-boot seed only.                          |
+| `ADMIN_PASSWORD` | `<your password>`                           | Mark as Secret. First-boot seed only.          |
+| `PUBLIC_API_URL` | `https://api.centralenv.home.example.com`   | Runtime — no rebuild on change.                |
+| `RUST_LOG`       | `centralenv_server=info,tower_http=info`    | Optional.                                      |
 
-In Coolify, mark `VITE_API_URL` as a **Build Variable** (not just runtime) so the web image bakes it into the bundle.
+Optional pinning instead of `:latest`:
 
-**4. Configure the volume**
-
-The compose file declares a named volume `centralenv-data` mounted at `/data` in the server. Coolify persists this across redeploys. To back up: SSH into the host and `docker run --rm -v centralenv-data:/data alpine tar czf - /data > backup.tgz`.
+```
+SERVER_IMAGE=ghcr.io/nusendra/centralenv-server:v0.1.0
+WEB_IMAGE=ghcr.io/nusendra/centralenv-web:v0.1.0
+```
 
 **5. Deploy**
 
-Click Deploy. After the build:
-
-- Hit `https://centralenv.home.example.com` → log in with the admin credentials.
-- Verify in the browser dev tools that requests go to `https://api.centralenv.home.example.com/...`.
+Click Deploy. Coolify will `docker compose pull` and start both services. Volume `centralenv-data` persists the SQLite DB across redeploys.
 
 **6. Point the CLI at it**
 
@@ -247,35 +252,50 @@ centralenv login \
   --token <token-from-Tokens-page>
 ```
 
-### Single-domain alternative (Tailscale-only, no Coolify)
-
-If you don't want a public domain at all and just want it on Tailscale:
+### Local Docker (using prebuilt images)
 
 ```sh
-# On the home server:
-git clone <repo> centralenv && cd centralenv
-cp .env.example .env  # set MASTER_KEY + ADMIN_PASSWORD; VITE_API_URL stays empty
-docker compose up -d --build
+cp .env.example .env
+# edit .env: MASTER_KEY, ADMIN_PASSWORD; PUBLIC_API_URL stays empty for localhost
+
+docker compose pull
+docker compose up -d
+# server → http://localhost:3001
+# web    → http://localhost:3000  (calls /api on same origin → won't work without proxy;
+#                                  set PUBLIC_API_URL=http://localhost:3001 if hitting from browser)
 ```
 
-Then on each device:
+### Local Docker (build from source)
+
+If you want to build images yourself instead of pulling:
 
 ```sh
-centralenv login --url http://<tailscale-host>:3001 --token <token>
+docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-The web UI in this mode only works from the home host itself (or via a manual reverse proxy) because the empty `VITE_API_URL` means the browser tries the same origin as where it loaded the page. For pure CLI use this doesn't matter.
+This uses `docker-compose.dev.yml`, which has `build:` directives instead of `image:`.
 
-### Rebuilding when `VITE_API_URL` changes
-
-`VITE_API_URL` is read at **build time** and embedded in the JS bundle. Changing it in env vars after the fact does nothing — you must rebuild the `web` image:
+### Backups
 
 ```sh
-docker compose build --no-cache web
-docker compose up -d web
+docker run --rm -v centralenv_centralenv-data:/data alpine tar czf - /data > backup.tgz
 ```
 
-In Coolify, hit **Redeploy** after editing the build variable.
+Back up `MASTER_KEY` separately. Without it, the SQLite contents are unrecoverable.
+
+### Tagged releases
+
+Push a tag to fire the release workflow:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+This produces:
+
+- `ghcr.io/nusendra/centralenv-server:v0.1.0` and `:latest`
+- `ghcr.io/nusendra/centralenv-web:v0.1.0` and `:latest`
+- A GitHub Release with CLI binaries for `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64` (each as `*.tar.gz` + `.sha256`)
 
 ---
 

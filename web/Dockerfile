@@ -9,11 +9,6 @@ RUN npm install --no-audit --no-fund
 COPY svelte.config.js tsconfig.json vite.config.ts ./
 COPY src ./src
 
-# Empty default = same-origin (single-domain deploy with reverse proxy).
-# Override at build time:  --build-arg VITE_API_URL=https://api.example.com
-ARG VITE_API_URL=
-ENV VITE_API_URL=$VITE_API_URL
-
 RUN npm run build
 
 # ---
@@ -26,9 +21,12 @@ RUN apk add --no-cache tini && \
 WORKDIR /app
 COPY --from=build /app/build ./build
 
+# PUBLIC_API_URL is read at RUNTIME via SvelteKit's $env/dynamic/public.
+# Override in docker-compose / Coolify env to point at a separate API host.
 ENV PORT=3000 \
     HOST=0.0.0.0 \
-    NODE_ENV=production
+    NODE_ENV=production \
+    PUBLIC_API_URL=
 
 USER app
 EXPOSE 3000

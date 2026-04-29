@@ -1,9 +1,7 @@
 services:
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    image: centralenv-server:latest
+    image: ${SERVER_IMAGE:-ghcr.io/nusendra/centralenv-server:latest}
+    pull_policy: always
     restart: unless-stopped
     environment:
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env or Coolify env}
@@ -24,17 +22,14 @@ services:
       start_period: 10s
 
   web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-      args:
-        # Public URL of the server (browser-visible). Required for two-domain deploys.
-        # Leave empty for same-origin / reverse-proxy setups.
-        VITE_API_URL: ${VITE_API_URL:-}
-    image: centralenv-web:latest
+    image: ${WEB_IMAGE:-ghcr.io/nusendra/centralenv-web:latest}
+    pull_policy: always
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      # Public URL of the server as seen by the browser.
+      # Leave empty for same-origin / reverse-proxy setups.
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

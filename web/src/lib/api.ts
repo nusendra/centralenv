@@ -1,8 +1,10 @@
+import { env } from '$env/dynamic/public';
 import { getToken, setToken } from './auth';
 
 // Empty string = same origin (Vite dev proxy or single-domain prod setup).
-// Set VITE_API_URL at build time to point at a separate API host.
-const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+// Set PUBLIC_API_URL at runtime to point at a separate API host
+// (works in prebuilt images — no rebuild needed when the URL changes).
+const BASE = (env.PUBLIC_API_URL ?? '').replace(/\/$/, '');
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
