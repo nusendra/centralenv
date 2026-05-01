@@ -28,8 +28,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -u 1000 -m -d /home/app app
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /data
 COPY --from=build /app/target/release/centralenv-server /usr/local/bin/centralenv-server
@@ -38,7 +37,6 @@ ENV BIND_ADDR=0.0.0.0:3001 \
     DATABASE_URL=sqlite:///data/centralenv.db \
     RUST_LOG=centralenv_server=info,tower_http=info
 
-USER app
 EXPOSE 3001
 
 CMD ["centralenv-server"]
