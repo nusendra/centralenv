@@ -15,7 +15,7 @@ services:
     ports:
       - "${SERVER_PORT:-3001}:3001"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3001/auth/me || [ $$? -eq 8 ]"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/auth/me || true"]
       interval: 30s
       timeout: 5s
       retries: 3
