@@ -1,10 +1,10 @@
 # CentralEnv
 
-Self-hosted, single-admin manager for `.env` variables. Run the server on a home box, expose it over Tailscale, manage projects and environments through a web UI, and pull values onto any device with a small Rust CLI.
+Self-hosted, single-admin manager for `.env` variables. Run the server on a home box, expose it over a Cloudflare Tunnel or Tailscale, manage projects and environments through a web UI, and pull values onto any device with a small Rust CLI.
 
 ```
                 ┌──────────────────────────┐
-   Browser  ──▶ │  SvelteKit web UI :5173  │
+   Browser  ──▶ │  SvelteKit web UI :3002  │
                 │  (admin only, login)     │
                 └──────────┬───────────────┘
                            │ /auth /api  (Bearer)
@@ -26,22 +26,22 @@ Self-hosted, single-admin manager for `.env` variables. Run the server on a home
 
 ## Components
 
-| Path        | What it is                                                                 |
-| ----------- | -------------------------------------------------------------------------- |
-| `server/`   | Rust + axum + sqlx + SQLite. AES-256-GCM at-rest encryption. Bearer auth.  |
-| `web/`      | SvelteKit admin UI. Login, projects, environments, raw `.env` editor, API tokens. |
-| `cli/`      | Rust CLI: `centralenv login`, `pull`, `run`.                               |
-| `start.sh`  | One-shot dev bootstrap: generates `.env`, builds, runs both server + web.  |
+| Path       | What it is                                                                        |
+| ---------- | --------------------------------------------------------------------------------- |
+| `server/`  | Rust + axum + sqlx + SQLite. AES-256-GCM at-rest encryption. Bearer auth.         |
+| `web/`     | SvelteKit admin UI. Login, projects, environments, raw `.env` editor, API tokens. |
+| `cli/`     | Rust CLI: `centralenv login`, `pull`, `run`.                                      |
+| `start.sh` | One-shot dev bootstrap: generates `.env`, builds, runs both server + web.         |
 
 ---
 
 ## Security model
 
-- **One admin user** (set at first run via `start.sh`), bcrypt-hashed.
+- **One admin user** (set via env vars on first boot), password is checked with bcrypt.
 - **Web sessions** — admin login returns a Bearer token; the SHA-256 hash is stored in `admin_sessions` with a 7-day expiry. Token lives in browser `localStorage`.
 - **CLI tokens** — created from the **Tokens** page, scoped to specific projects, shown once on creation, bcrypt-hashed at rest.
-- **Variable values** — encrypted with AES-256-GCM using `MASTER_KEY` (random 32 bytes, base64). The key never touches SQLite; it's loaded from `server/.env`.
-- **Network** — there is no built-in TLS. Run the server only on a private network (Tailscale, VPN, or behind a reverse proxy). Anything reachable from the open internet should sit behind something that terminates TLS.
+- **Variable values** — encrypted with AES-256-GCM using `MASTER_KEY` (random 32 bytes, base64). The key never touches SQLite; it's loaded from the environment.
+- **Network** — there is no built-in TLS. Run the server only on a private network (Tailscale, VPN) or behind a reverse proxy / Cloudflare Tunnel that terminates TLS.
 
 If `MASTER_KEY` is lost, all encrypted values are unrecoverable — back it up.
 
@@ -51,15 +51,14 @@ If `MASTER_KEY` is lost, all encrypted values are unrecoverable — back it up.
 
 | Tool       | Min version | Notes                                  |
 | ---------- | ----------- | -------------------------------------- |
-| Rust       | 1.75+       | `rustup install stable`                |
+| Rust       | 1.88+       | `rustup install stable`                |
 | Bun        | 1.x         | for the web dev server (`bun install`) |
 | SQLite CLI | any         | only needed for manual DB inspection   |
 | OpenSSL    | any         | used by `start.sh` to generate the key |
-| Tailscale  | optional    | recommended way to reach the server    |
 
 ---
 
-## First-time setup (server host)
+## First-time setup (local dev)
 
 ```sh
 git clone <this-repo> centralenv
@@ -70,20 +69,20 @@ cd centralenv
 `start.sh` will:
 
 1. Generate `server/.env` with a random `MASTER_KEY` and prompt for an admin username + password.
-2. Generate `web/.env` (`VITE_API_URL=http://localhost:3001`).
+2. Generate `web/.env` (`PUBLIC_API_URL=http://localhost:3001`).
 3. Build the server (`cargo build`).
 4. Install web deps (`bun install`).
-5. Run the API on `:3001` and the web UI on `:5173`.
+5. Run the API on `:3001` and the web UI on `:5173` (dev mode).
 
 Open `http://localhost:5173` and log in.
 
-### Manual setup (if you don't want `start.sh`)
+### Manual setup
 
 ```sh
 # server/.env
 cat > server/.env <<EOF
 DATABASE_URL=sqlite://centralenv.db
-MASTER_KEY=$(openssl rand -base64 32)
+MASTER_KEY=$(openssl rand -base64 32 | tr -d '\n ')
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=changeme
 BIND_ADDR=0.0.0.0:3001
@@ -94,7 +93,7 @@ EOF
 (cd server && DATABASE_URL=sqlite:centralenv.db cargo run)
 
 # in another terminal: web
-(cd web && bun install && bun run dev --port 5173)
+(cd web && bun install && bun run dev)
 ```
 
 ---
@@ -109,29 +108,39 @@ EOF
 
 ---
 
-## Installing the CLI on another device
-
-The other device must be able to reach the server (e.g. on the same Tailscale tailnet).
+## Installing the CLI
 
 ### Option A — download a prebuilt binary (fastest)
 
 Pick the right archive from the latest [GitHub Release](https://github.com/nusendra/centralenv/releases/latest):
 
 ```sh
-# macOS (Apple Silicon)
-curl -L -o centralenv.tar.gz \
-  https://github.com/nusendra/centralenv/releases/latest/download/centralenv-darwin-arm64.tar.gz
+# macOS — Apple Silicon (M1/M2/M3/M4)
+curl -L https://github.com/nusendra/centralenv/releases/latest/download/centralenv-macos-arm64.tar.gz \
+  | tar xz
+sudo mv centralenv-macos-arm64 /usr/local/bin/centralenv
+
+# macOS — Intel
+curl -L https://github.com/nusendra/centralenv/releases/latest/download/centralenv-macos-amd64.tar.gz \
+  | tar xz
+sudo mv centralenv-macos-amd64 /usr/local/bin/centralenv
 
 # Linux x86_64
-curl -L -o centralenv.tar.gz \
-  https://github.com/nusendra/centralenv/releases/latest/download/centralenv-linux-amd64.tar.gz
+curl -L https://github.com/nusendra/centralenv/releases/latest/download/centralenv-linux-amd64.tar.gz \
+  | tar xz
+sudo mv centralenv-linux-amd64 /usr/local/bin/centralenv
 
-tar xzf centralenv.tar.gz
-sudo install centralenv-* /usr/local/bin/centralenv
-centralenv --help
+# Linux arm64 (e.g. Raspberry Pi)
+curl -L https://github.com/nusendra/centralenv/releases/latest/download/centralenv-linux-arm64.tar.gz \
+  | tar xz
+sudo mv centralenv-linux-arm64 /usr/local/bin/centralenv
 ```
 
-Available targets: `darwin-amd64`, `darwin-arm64`, `linux-amd64`, `linux-arm64`. Each ships with a `.sha256` next to it.
+Each release also ships a `.sha256` file for verification:
+
+```sh
+shasum -a 256 -c centralenv-macos-arm64.tar.gz.sha256
+```
 
 ### Option B — build from source
 
@@ -142,33 +151,15 @@ cargo build --release
 sudo ln -sf "$PWD/target/release/centralenv" /usr/local/bin/centralenv
 ```
 
-Or `cargo install --path centralenv/cli` if you have a Rust toolchain.
-
 ### Configure once
 
 ```sh
 centralenv login \
-  --url http://<tailscale-host-or-ip>:3001 \
+  --url https://<your-api-domain> \
   --token <token-copied-from-web-ui>
 ```
 
-This writes a config to `$XDG_CONFIG_HOME/centralenv/config.toml` (macOS: `~/Library/Application Support/centralenv/config.toml`). Treat this file like a credential.
-
-### Find the server's address
-
-On the server host:
-
-```sh
-tailscale ip -4         # e.g. 100.101.102.103
-tailscale status        # shows the MagicDNS hostname (e.g. "homeserver")
-```
-
-Either form works in `--url`:
-
-```sh
-centralenv login --url http://homeserver:3001 --token …
-centralenv login --url http://100.101.102.103:3001 --token …
-```
+Config is written to `$XDG_CONFIG_HOME/centralenv/config.toml` (macOS: `~/Library/Application Support/centralenv/config.toml`). Treat this file like a credential.
 
 ---
 
@@ -177,7 +168,6 @@ centralenv login --url http://100.101.102.103:3001 --token …
 ### `pull` — write a `.env` file
 
 ```sh
-# Inside any project directory
 centralenv pull acme-api -e production           # writes ./.env
 centralenv pull acme-api -e development -o .env.dev
 ```
@@ -198,42 +188,48 @@ Anything after `--` is the command and its arguments. The vars exist only in tha
 
 GitHub Actions builds and pushes prebuilt images to **GHCR** on every push to `master`. Coolify pulls these — no compilation on your home server.
 
-| Image                                       | What                                       |
-| ------------------------------------------- | ------------------------------------------ |
-| `ghcr.io/nusendra/centralenv-server:latest` | Rust API binary (linux/amd64, linux/arm64) |
-| `ghcr.io/nusendra/centralenv-web:latest`    | SvelteKit (adapter-node) bundle            |
+| Image                                       | Platforms                    |
+| ------------------------------------------- | ---------------------------- |
+| `ghcr.io/nusendra/centralenv-server:latest` | linux/amd64, linux/arm64     |
+| `ghcr.io/nusendra/centralenv-web:latest`    | linux/amd64, linux/arm64     |
 
-`PUBLIC_API_URL` is read at **runtime** by the web container, so changing the API URL never requires a rebuild.
+`PUBLIC_API_URL` is read at **runtime** by the web container — changing the API URL never requires a rebuild.
 
 ### Coolify (recommended)
 
-**1. Make sure the package is accessible**
+**1. Make GHCR packages accessible**
 
-The first time the workflow runs, it creates two private GHCR packages. In GitHub → your profile → **Packages** → open each package → Settings → set **Visibility: Public**, OR add Coolify's GitHub PAT as a registry credential in Coolify (Sources → Add → "GitHub Container Registry").
+After the first CI run, go to GitHub → your profile → **Packages** → open each package (`centralenv-server`, `centralenv-web`) → Settings → set **Visibility: Public**. Or add a GitHub PAT as a registry credential in Coolify.
 
 **2. Create the project**
 
 - New Resource → **Docker Compose** → point at this Git repo (`master`).
-- Coolify detects `docker-compose.yml` (which uses `image:`, no build step on the host).
+- Coolify detects `docker-compose.yml` (uses `image:`, no build step on the host).
 
 **3. Assign domains**
 
-- `server` → e.g. `https://api.centralenv.home.example.com`
-- `web`    → e.g. `https://centralenv.home.example.com`
-
-Coolify provisions Let's Encrypt certs automatically.
+- `server` → e.g. `https://centralenv-api.example.com`
+- `web` → e.g. `https://centralenv.example.com`
 
 **4. Set environment variables**
 
-| Key              | Value                                       | Notes                                          |
-| ---------------- | ------------------------------------------- | ---------------------------------------------- |
-| `MASTER_KEY`     | `<openssl rand -base64 32>`                 | Mark as Secret. Back it up — losing it bricks the DB. |
-| `ADMIN_USERNAME` | `admin`                                     | First-boot seed only.                          |
-| `ADMIN_PASSWORD` | `<your password>`                           | Mark as Secret. First-boot seed only.          |
-| `PUBLIC_API_URL` | `https://api.centralenv.home.example.com`   | Runtime — no rebuild on change.                |
-| `RUST_LOG`       | `centralenv_server=info,tower_http=info`    | Optional.                                      |
+| Key              | Value                                     | Notes                                               |
+| ---------------- | ----------------------------------------- | --------------------------------------------------- |
+| `MASTER_KEY`     | see generation command below              | Mark as Secret. Back it up — losing it bricks the DB. |
+| `ADMIN_USERNAME` | `admin`                                   | First-boot seed only.                               |
+| `ADMIN_PASSWORD` | `<your password>`                         | Mark as Secret. First-boot seed only.               |
+| `PUBLIC_API_URL` | `https://centralenv-api.example.com`      | Runtime — no rebuild needed on change.              |
+| `SERVER_PORT`    | `3001`                                    | Optional host port override.                        |
+| `WEB_PORT`       | `3002`                                    | Optional host port override.                        |
+| `RUST_LOG`       | `centralenv_server=info,tower_http=info`  | Optional.                                           |
 
-Optional pinning instead of `:latest`:
+Generate `MASTER_KEY` (must have no spaces or newlines):
+
+```sh
+openssl rand -base64 32 | tr -d '\n '
+```
+
+Optional: pin to a specific image tag instead of `:latest`:
 
 ```
 SERVER_IMAGE=ghcr.io/nusendra/centralenv-server:v0.1.0
@@ -242,42 +238,54 @@ WEB_IMAGE=ghcr.io/nusendra/centralenv-web:v0.1.0
 
 **5. Deploy**
 
-Click Deploy. Coolify will `docker compose pull` and start both services. Volume `centralenv-data` persists the SQLite DB across redeploys.
+Click Deploy. Coolify pulls both images and starts the services. Volume `centralenv-data` persists the SQLite DB across redeploys.
 
 **6. Point the CLI at it**
 
 ```sh
 centralenv login \
-  --url https://api.centralenv.home.example.com \
+  --url https://centralenv-api.example.com \
   --token <token-from-Tokens-page>
 ```
 
-### Local Docker (using prebuilt images)
+### Cloudflare Tunnel (bypassing Traefik)
+
+If you run a Cloudflare Tunnel in front of Coolify, **point the tunnel directly at the container host ports** rather than through Traefik on port 80. Traefik's HTTP entrypoint redirects to HTTPS, which creates a redirect loop when combined with Cloudflare's TLS termination.
+
+In `/etc/cloudflared/config.yml` on your home server:
+
+```yaml
+ingress:
+  - hostname: centralenv.example.com
+    service: http://127.0.0.1:3002        # web container host port
+    originRequest:
+      hostHeader: centralenv.example.com
+  - hostname: centralenv-api.example.com
+    service: http://127.0.0.1:3001        # server container host port
+    originRequest:
+      hostHeader: centralenv-api.example.com
+  - service: http_status:404
+```
+
+Then restart: `sudo systemctl restart cloudflared`
+
+### Local Docker
 
 ```sh
 cp .env.example .env
-# edit .env: MASTER_KEY, ADMIN_PASSWORD; PUBLIC_API_URL stays empty for localhost
+# edit: set MASTER_KEY, ADMIN_PASSWORD
+# set PUBLIC_API_URL=http://localhost:3001 if using browser on same machine
 
 docker compose pull
 docker compose up -d
 # server → http://localhost:3001
-# web    → http://localhost:3000  (calls /api on same origin → won't work without proxy;
-#                                  set PUBLIC_API_URL=http://localhost:3001 if hitting from browser)
+# web    → http://localhost:3002
 ```
-
-### Local Docker (build from source)
-
-If you want to build images yourself instead of pulling:
-
-```sh
-docker compose -f docker-compose.dev.yml up -d --build
-```
-
-This uses `docker-compose.dev.yml`, which has `build:` directives instead of `image:`.
 
 ### Backups
 
 ```sh
+# Docker volume backup
 docker run --rm -v centralenv_centralenv-data:/data alpine tar czf - /data > backup.tgz
 ```
 
@@ -285,7 +293,7 @@ Back up `MASTER_KEY` separately. Without it, the SQLite contents are unrecoverab
 
 ### Tagged releases
 
-Push a tag to fire the release workflow:
+Push a tag to produce versioned Docker images and CLI binaries:
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
@@ -295,72 +303,22 @@ This produces:
 
 - `ghcr.io/nusendra/centralenv-server:v0.1.0` and `:latest`
 - `ghcr.io/nusendra/centralenv-web:v0.1.0` and `:latest`
-- A GitHub Release with CLI binaries for `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64` (each as `*.tar.gz` + `.sha256`)
+- A GitHub Release with CLI binaries: `macos-amd64`, `macos-arm64`, `linux-amd64`, `linux-arm64` (each as `*.tar.gz` + `.sha256`)
 
 ---
 
 ## Operating the server long-term
 
-### Run as a service (macOS launchd)
+### Backups (non-Docker)
 
-Create `~/Library/LaunchAgents/com.centralenv.server.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>            <string>com.centralenv.server</string>
-  <key>WorkingDirectory</key> <string>/path/to/centralenv/server</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/path/to/centralenv/server/target/release/centralenv-server</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>DATABASE_URL</key>     <string>sqlite://centralenv.db</string>
-    <key>MASTER_KEY</key>       <string>BASE64_KEY_HERE</string>
-    <key>BIND_ADDR</key>        <string>0.0.0.0:3001</string>
-  </dict>
-  <key>RunAtLoad</key>         <true/>
-  <key>KeepAlive</key>         <true/>
-  <key>StandardOutPath</key>   <string>/tmp/centralenv-server.log</string>
-  <key>StandardErrorPath</key> <string>/tmp/centralenv-server.err</string>
-</dict>
-</plist>
-```
-
-Then:
-
-```sh
-(cd server && cargo build --release)
-launchctl load ~/Library/LaunchAgents/com.centralenv.server.plist
-```
-
-Note the admin user is seeded on first boot only; the launchd plist doesn't need `ADMIN_USERNAME` / `ADMIN_PASSWORD` after that.
-
-### Backups
-
-The only state worth backing up is:
+The only state worth backing up:
 
 ```
-server/centralenv.db        # the encrypted variable store
-server/.env                 # contains MASTER_KEY — without this, the DB is useless
+server/centralenv.db   # the encrypted variable store
+server/.env            # contains MASTER_KEY — without this, the DB is useless
 ```
 
 A nightly `cp` of both files to another disk / cloud bucket is enough.
-
-### Production web build (optional)
-
-The current setup runs the SvelteKit dev server. If you want a production build:
-
-```sh
-(cd web && bun install && bun run build)
-# serve the contents of web/build/ behind any static server,
-# or via Node:  node web/build
-```
-
-Make sure `VITE_API_URL` points at the public/Tailscale URL of the API at build time.
 
 ---
 
@@ -375,7 +333,7 @@ centralenv/
 │   │   └── config.rs        # config.toml load/save
 │   └── Cargo.toml
 ├── server/
-│   ├── migrations/          # sqlx migrations
+│   ├── migrations/
 │   │   ├── 0001_initial.sql
 │   │   └── 0002_admin_sessions.sql
 │   ├── src/
@@ -404,51 +362,53 @@ centralenv/
 │   │       ├── projects/
 │   │       └── tokens/
 │   └── package.json
+├── docker-compose.yml
+├── .env.example
 └── start.sh
 ```
 
 ---
 
-## API reference (short)
+## API reference
 
-All endpoints are JSON.
+All endpoints return JSON.
 
 ### Auth
 
-| Method | Path           | Auth   | Body                                     | Returns                          |
-| ------ | -------------- | ------ | ---------------------------------------- | -------------------------------- |
-| POST   | `/auth/login`  | none   | `{ "username", "password" }`             | `{ "username", "token" }`        |
-| POST   | `/auth/logout` | admin  | —                                        | 204                              |
-| GET    | `/auth/me`     | admin  | —                                        | 204                              |
+| Method | Path           | Auth  | Body                            | Returns                   |
+| ------ | -------------- | ----- | ------------------------------- | ------------------------- |
+| POST   | `/auth/login`  | none  | `{ "username", "password" }`   | `{ "username", "token" }` |
+| POST   | `/auth/logout` | admin | —                               | 204                       |
+| GET    | `/auth/me`     | admin | —                               | 204                       |
 
-### Projects / Environments / Variables (admin)
+### Projects / Environments / Variables (admin Bearer)
 
-| Method | Path                                                         |
-| ------ | ------------------------------------------------------------ |
-| GET    | `/api/projects`                                              |
-| POST   | `/api/projects`                                              |
-| PUT    | `/api/projects/:id`                                          |
-| DELETE | `/api/projects/:id`                                          |
-| GET    | `/api/projects/:id/environments`                             |
-| POST   | `/api/projects/:id/environments`                             |
-| DELETE | `/api/projects/:id/environments/:env_id`                     |
-| GET    | `/api/environments/:env_id/variables`                        |
-| POST   | `/api/environments/:env_id/variables`                        |
-| DELETE | `/api/environments/:env_id/variables/:key`                   |
+| Method | Path                                          |
+| ------ | --------------------------------------------- |
+| GET    | `/api/projects`                               |
+| POST   | `/api/projects`                               |
+| PUT    | `/api/projects/:id`                           |
+| DELETE | `/api/projects/:id`                           |
+| GET    | `/api/projects/:id/environments`              |
+| POST   | `/api/projects/:id/environments`              |
+| DELETE | `/api/projects/:id/environments/:env_id`      |
+| GET    | `/api/environments/:env_id/variables`         |
+| POST   | `/api/environments/:env_id/variables`         |
+| DELETE | `/api/environments/:env_id/variables/:key`    |
 
-### Tokens (admin)
+### Tokens (admin Bearer)
 
-| Method | Path                  |
-| ------ | --------------------- |
-| GET    | `/api/tokens`         |
-| POST   | `/api/tokens`         |
-| DELETE | `/api/tokens/:id`     |
+| Method | Path              |
+| ------ | ----------------- |
+| GET    | `/api/tokens`     |
+| POST   | `/api/tokens`     |
+| DELETE | `/api/tokens/:id` |
 
-### CLI fetch
+### CLI fetch (CLI token)
 
-| Method | Path                                            | Auth      |
-| ------ | ----------------------------------------------- | --------- |
-| GET    | `/api/projects/:slug/env?environment=<name>`    | CLI token |
+| Method | Path                                         |
+| ------ | -------------------------------------------- |
+| GET    | `/api/projects/:slug/env?environment=<name>` |
 
 Returns `{ KEY: "value", … }`.
 
@@ -456,24 +416,34 @@ Returns `{ KEY: "value", … }`.
 
 ## Troubleshooting
 
-**Login works, but a refresh redirects me to `/login`.**
-You're running an old server build. Restart it:
+**`MASTER_KEY` error on Coolify / "Invalid symbol" or "must be 32 bytes".**
+The key must have no spaces or newlines. Always generate it with:
 ```sh
-lsof -i :3001 -t | xargs kill
-(cd server && cargo run)
+openssl rand -base64 32 | tr -d '\n '
+```
+Pasting from a terminal that wraps the output adds a newline. If you change the key, all stored variable values become unrecoverable.
+
+**SQLite "unable to open database file" in Docker.**
+The `centralenv-data` volume must be writable by the container. The server container runs as root — if you manually created the volume directory and it's owned by another user, fix it:
+```sh
+# on the Docker host
+sudo chown -R root:root /var/lib/docker/volumes/centralenv_centralenv-data
 ```
 
-**`/projects` page takes seconds to load.**
-The server scans bcrypt hashes for every CLI token request. If you have many CLI tokens, this is slow. Web admin sessions use SHA-256 + indexed lookup and stay fast.
+**Server container shows "unhealthy" in `docker ps`.**
+The healthcheck requires `curl`. Make sure you're running the latest image (built after the `curl` fix was merged). Pull and redeploy:
+```sh
+docker compose pull && docker compose up -d
+```
+
+**`centralenv.example.com` shows a redirect loop.**
+If using a Cloudflare Tunnel pointed at Traefik port 80, Traefik redirects HTTP→HTTPS, which loops. Fix: point cloudflared directly at the container's host port (`3002` for web, `3001` for API) — see the Cloudflare Tunnel section above.
 
 **`Unauthorized — check your token` from CLI.**
 Either the token was deleted from the **Tokens** page, or the project slug isn't in that token's allowed-projects list. Recreate the token and re-run `centralenv login`.
 
-**`MASTER_KEY must be exactly 32 bytes (base64-encoded)`.**
-Regenerate: `openssl rand -base64 32` and put it in `server/.env`. **Replacing the key invalidates all stored variable values.**
-
-**`failed to connect to server`** from a remote device.
-Check Tailscale is up on both ends (`tailscale status`), the URL in `centralenv login` is reachable (`curl http://<host>:3001/`), and `BIND_ADDR=0.0.0.0:3001` (not `127.0.0.1`).
+**`failed to connect to server` from a remote device.**
+Check that the URL in `centralenv login` is reachable (`curl https://<host>/auth/me` should return 401), and that `BIND_ADDR=0.0.0.0:3001` (not `127.0.0.1`).
 
 ---
 
